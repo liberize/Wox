@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Timers;
 using System.Windows;
+using System.Collections.Generic;
 using Wox.Core;
 using Wox.Core.Plugin;
 using Wox.Core.Resource;
@@ -14,6 +15,7 @@ using Wox.Infrastructure.Logger;
 using Wox.Infrastructure.UserSettings;
 using Wox.ViewModel;
 using Stopwatch = Wox.Infrastructure.Stopwatch;
+using System.IO;
 
 namespace Wox
 {
@@ -79,6 +81,7 @@ namespace Wox
                 AutoStartup();
                 AutoUpdates();
 
+                ParseCommandLineArgs(SingleInstance<App>.GetCommandLineArgs(Unique));
                 _mainVM.MainWindowVisibility = _settings.HideOnStartup ? Visibility.Hidden : Visibility.Visible;
                 Log.Info("|App.OnStartup|End Wox startup ----------------------------------------------------  ");
             });
@@ -164,9 +167,34 @@ namespace Wox
             }
         }
 
-        public void OnSecondAppStarted()
+        private void ParseCommandLineArgs(IList<string> args)
         {
-            Current.MainWindow.Visibility = Visibility.Visible;
+            if (args == null || args.Count <= 1)
+                return;
+
+            args.RemoveAt(0);
+            string flag = null;
+            foreach (var arg in args)
+            {
+                if (flag == "-q" || flag == "--query")
+                {
+                    if (_mainVM != null)
+                        _mainVM.ChangeQueryText(arg);
+                    break;
+                }
+                flag = arg;
+            }
         }
+
+        #region ISingleInstanceApp Members
+
+        public bool SignalExternalCommandLineArgs(IList<string> args)
+        {
+            ParseCommandLineArgs(args);
+            Current.MainWindow.Visibility = Visibility.Visible;
+            return true;
+        }
+
+        #endregion
     }
 }

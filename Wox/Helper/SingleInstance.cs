@@ -132,7 +132,7 @@ namespace Wox.Helper
         // This is the hard-coded message value used by WinForms for Shell_NotifyIcon.
         // It's relatively safe to reuse.
         TRAYMOUSEMESSAGE = 0x800, //WM_USER + 1024
-        APP = 0x8000
+        APP = 0x8000,
     }
 
     [SuppressUnmanagedCodeSecurity]
@@ -182,12 +182,12 @@ namespace Wox.Helper
             }
         }
 
-    } 
+    }
 
-    public interface ISingleInstanceApp 
-    { 
-         void OnSecondAppStarted(); 
-    } 
+    public interface ISingleInstanceApp
+    {
+        bool SignalExternalCommandLineArgs(IList<string> args);
+    }
 
     /// <summary>
     /// This class checks to make sure that only one instance of 
@@ -200,9 +200,9 @@ namespace Wox.Helper
     /// running as Administrator, can activate it with command line arguments.
     /// For most apps, this will not be much of an issue.
     /// </remarks>
-    public static class SingleInstance<TApplication>  
-                where   TApplication: Application ,  ISingleInstanceApp 
-                                    
+    public static class SingleInstance<TApplication>
+                where TApplication : Application, ISingleInstanceApp
+
     {
         #region Private Fields
 
@@ -229,16 +229,29 @@ namespace Wox.Helper
         /// <summary>
         /// Application mutex.
         /// </summary>
-        internal static Mutex singleInstanceMutex;
+        private static Mutex singleInstanceMutex;
 
         /// <summary>
         /// IPC channel for communications.
         /// </summary>
         private static IpcServerChannel channel;
 
+        /// <summary>
+        /// List of command line arguments for the application.
+        /// </summary>
+        private static IList<string> commandLineArgs;
+
         #endregion
 
         #region Public Properties
+
+        /// <summary>
+        /// Gets list of command line arguments for the application.
+        /// </summary>
+        public static IList<string> CommandLineArgs
+        {
+            get { return commandLineArgs; }
+        }
 
         #endregion
 
@@ -249,8 +262,10 @@ namespace Wox.Helper
         /// If not, activates the first instance.
         /// </summary>
         /// <returns>True if this is the first instance of the application.</returns>
-        public static bool InitializeAsFirstInstance( string uniqueName )
+        public static bool InitializeAsFirstInstance(string uniqueName)
         {
+            commandLineArgs = GetCommandLineArgs(uniqueName);
+
             // Build unique application Id and the IPC channel name.
             string applicationIdentifier = uniqueName + Environment.UserName;
 
@@ -262,13 +277,13 @@ namespace Wox.Helper
             if (firstInstance)
             {
                 CreateRemoteService(channelName);
-                return true;
             }
             else
             {
-                SignalFirstInstance(channelName);
-                return false;
+                SignalFirstInstance(channelName, commandLineArgs);
             }
+
+            return firstInstance;
         }
 
         /// <summary>
@@ -276,7 +291,11 @@ namespace Wox.Helper
         /// </summary>
         public static void Cleanup()
         {
-            singleInstanceMutex?.ReleaseMutex();
+            if (singleInstanceMutex != null)
+            {
+                singleInstanceMutex.Close();
+                singleInstanceMutex = null;
+            }
 
             if (channel != null)
             {
@@ -293,7 +312,7 @@ namespace Wox.Helper
         /// Gets command line args - for ClickOnce deployed applications, command line args may not be passed directly, they have to be retrieved.
         /// </summary>
         /// <returns>List of command line arg strings.</returns>
-        private static IList<string> GetCommandLineArgs( string uniqueApplicationName )
+        public static IList<string> GetCommandLineArgs(string uniqueApplicationName)
         {
             string[] args = null;
             if (AppDomain.CurrentDomain.ActivationContext == null)
@@ -316,7 +335,7 @@ namespace Wox.Helper
                 {
                     try
                     {
-                        using (TextReader reader = new StreamReader(cmdLinePath, Encoding.Unicode))
+                        using (TextReader reader = new StreamReader(cmdLinePath, System.Text.Encoding.Unicode))
                         {
                             args = NativeMethods.CommandLineToArgvW(reader.ReadToEnd());
                         }
@@ -371,7 +390,7 @@ namespace Wox.Helper
         /// <param name="args">
         /// Command line arguments for the second instance, passed to the first instance to take appropriate action.
         /// </param>
-        private static void SignalFirstInstance(string channelName)
+        private static void SignalFirstInstance(string channelName, IList<string> args)
         {
             IpcClientChannel secondInstanceChannel = new IpcClientChannel();
             ChannelServices.RegisterChannel(secondInstanceChannel, true);
@@ -387,7 +406,7 @@ namespace Wox.Helper
             {
                 // Invoke a method of the remote service exposed by the first instance passing on the command line
                 // arguments and causing the first instance to activate itself
-                firstInstanceRemoteServiceReference.InvokeFirstInstance();
+                firstInstanceRemoteServiceReference.InvokeFirstInstance(args);
             }
         }
 
@@ -396,9 +415,11 @@ namespace Wox.Helper
         /// </summary>
         /// <param name="arg">Callback argument.</param>
         /// <returns>Always null.</returns>
-        private static object ActivateFirstInstanceCallback(object o)
+        private static object ActivateFirstInstanceCallback(object arg)
         {
-            ActivateFirstInstance();
+            // Get command line args to be passed to first instance
+            IList<string> args = arg as IList<string>;
+            ActivateFirstInstance(args);
             return null;
         }
 
@@ -406,7 +427,7 @@ namespace Wox.Helper
         /// Activates the first instance of the application with arguments from a second instance.
         /// </summary>
         /// <param name="args">List of arguments to supply the first instance of the application.</param>
-        private static void ActivateFirstInstance()
+        private static void ActivateFirstInstance(IList<string> args)
         {
             // Set main window state and process command line args
             if (Application.Current == null)
@@ -414,7 +435,7 @@ namespace Wox.Helper
                 return;
             }
 
-            ((TApplication)Application.Current).OnSecondAppStarted();
+            ((TApplication)Application.Current).SignalExternalCommandLineArgs(args);
         }
 
         #endregion
@@ -430,12 +451,14 @@ namespace Wox.Helper
             /// <summary>
             /// Activates the first instance of the application.
             /// </summary>
-            public void InvokeFirstInstance()
+            /// <param name="args">List of arguments to pass to the first instance.</param>
+            public void InvokeFirstInstance(IList<string> args)
             {
                 if (Application.Current != null)
                 {
                     // Do an asynchronous call to ActivateFirstInstance function
-                    Application.Current.Dispatcher.Invoke(ActivateFirstInstance);
+                    Application.Current.Dispatcher.BeginInvoke(
+                        DispatcherPriority.Normal, new DispatcherOperationCallback(SingleInstance<TApplication>.ActivateFirstInstanceCallback), args);
                 }
             }
 
