@@ -82,6 +82,7 @@ namespace Wox
                             QueryTextBox.SelectAll();
                             _viewModel.LastQuerySelected = true;
                         }
+                        _viewModel.Query();
                     }
                 }
             };
